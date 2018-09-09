@@ -19,18 +19,19 @@ uart_rtos_config_t uart_config = {
     .buffer_size = sizeof(background_buffer),
 };
 
-void k64_aes_crc_send_uart(uint8_t *msg)
+void k64_aes_crc_send_uart(uint8_t *msg, uint8_t size)
 {
-
 	uint32_t chksum;
-	uint8_t * buffer = (uint8_t *) pvPortMalloc(64 * sizeof(uint8_t));
 
-	strncpy((char *) buffer, (char *) msg, 64);
+	uint8_t * buffer = (uint8_t *) pvPortMalloc((size) * sizeof(uint8_t));
 
-	chksum = get_crc32((char *)buffer, 64);
-	test_encrypt_cbc(buffer, 64);
+	strncpy((char *) buffer, (char *) msg, size-CHKSUM_SIZE_BYTES);
 
-	memcpy(&buffer[64], &chksum, 4);
+	chksum = get_crc32((char *)buffer, size-CHKSUM_SIZE_BYTES);
+	test_encrypt_cbc(buffer, size-CHKSUM_SIZE_BYTES);
+
+	/** Adding the calculated CRC to the buffer */
+	memcpy(&buffer[size-CHKSUM_SIZE_BYTES], &chksum, CHKSUM_SIZE_BYTES);
 
 	uart_config.srcclk = DEMO_UART_CLK_FREQ;
 	uart_config.base = DEMO_UART;
@@ -40,7 +41,7 @@ void k64_aes_crc_send_uart(uint8_t *msg)
 	}
 
 	/* Send introduction message. */
-	if (0 > UART_RTOS_Send(&handle, buffer, 68)) {
+	if (0 > UART_RTOS_Send(&handle, buffer, size)) {
 		vTaskSuspend(NULL);
 	}
 
@@ -51,22 +52,24 @@ void k64_aes_crc_send_uart(uint8_t *msg)
 
 void k64_aes_crc_recv_uart()
 {
-
 	uint32_t checksum_crc_32;
-    size_t n;
+    size_t n;	/** received buffer length */
 
     uart_config.srcclk = DEMO_UART_CLK_FREQ;
     uart_config.base = DEMO_UART;
+
 	if (0 > UART_RTOS_Init(&handle, &t_handle, &uart_config)) {
 		vTaskSuspend(NULL);
 	}
 	UART_RTOS_Receive(&handle, recv_buffer, sizeof(recv_buffer), &n);
 
-	memcpy(&checksum_crc_32,&recv_buffer[64],4);
+	/** Storing the received crc32 for comparing */
+	memcpy(&checksum_crc_32,&recv_buffer[n-CHKSUM_SIZE_BYTES],CHKSUM_SIZE_BYTES);
 
-	test_decrypt_cbc(recv_buffer, n);
+	/** Message length is n minus CHKSUM SIZE which in this case is 4 */
+	test_decrypt_cbc(recv_buffer, n-CHKSUM_SIZE_BYTES);
 
-	if(checkup_crc32((char *)recv_buffer, 64, checksum_crc_32))
+	if(checkup_crc32((char *)recv_buffer, n-CHKSUM_SIZE_BYTES, checksum_crc_32))
 	{
 		printf("CRC32 Correct\n");
 	}
@@ -78,24 +81,24 @@ void k64_aes_crc_send_tcp(uint8_t *msg, uint8_t msg_size, uint16_t app_port)
 {
 	struct netconn *conn;
 		ip_addr_t dst_ip;
-	//	err_t err;
-	//	uint32_t chksum;
-	//	struct netbuf *buf;
-	//	void *data;
-	//	u16_t len;
 		uint32_t chksum;
-
-
+#ifdef CLIENT_RECV
+		err_t err;
+		uint32_t chksum;
+		struct netbuf *buf;
+		void *data;
+		u16_t len;
+#endif
 
 		uint8_t * buffer = (uint8_t *)pvPortMalloc(msg_size * sizeof(uint8_t));
 
 		strncpy((char *)buffer, (char *)msg, msg_size);
 
-		chksum = get_crc32((char *)buffer, msg_size-4);
+		chksum = get_crc32((char *)buffer, msg_size-CHKSUM_SIZE_BYTES);
 
 		test_encrypt_cbc(buffer, msg_size);
 
-		memcpy(&buffer[msg_size-4], &chksum, 4);
+		memcpy(&buffer[msg_size-4], &chksum, CHKSUM_SIZE_BYTES);
 
 		IP4_ADDR(&dst_ip, 192, 168, 0, 100);
 
@@ -107,12 +110,13 @@ void k64_aes_crc_send_tcp(uint8_t *msg, uint8_t msg_size, uint16_t app_port)
 		netconn_connect(conn, &dst_ip, app_port);
 		/* Process the new connection. */
 		/*err = */netconn_write(conn,(void *) buffer, msg_size, NETCONN_COPY);
-
-	//	if ((err = netconn_recv(conn, &buf)) == ERR_OK)
-	//	{
-	//		netbuf_data(buf, &data, &len);
-	//		printf("%s", (char *) data);
-	//	}
+#ifdef CLIENT_RECV
+		if ((err = netconn_recv(conn, &buf)) == ERR_OK)
+		{
+			netbuf_data(buf, &data, &len);
+			printf("%s", (char *) data);
+		}
+#endif
 		netconn_close(conn);
 		netconn_delete(conn);
 
@@ -148,13 +152,15 @@ void k64_aes_crc_recv_tcp(uint16_t app_port) {
 				do {
 					netbuf_data(buf, &data, &len);
 					p = (uint8_t*)data;
-					memcpy(&checksum_crc_32, &(p[len-4]), 4);
+					memcpy(&checksum_crc_32, &(p[len-CHKSUM_SIZE_BYTES]), CHKSUM_SIZE_BYTES);
 					test_decrypt_cbc(p, (uint8_t) len);
-					if(checkup_crc32((char *)data, len-4, checksum_crc_32))
+					if(checkup_crc32((char *)data, len-CHKSUM_SIZE_BYTES, checksum_crc_32))
 					{
 						printf("CRC32 Correct\n");
 					}
-					//err = netconn_write(newconn, data, len, NETCONN_COPY);
+#ifdef SERVER_SEND
+					err = netconn_write(newconn, data, len, NETCONN_COPY);
+#endif
 				} while (netbuf_next(buf) >= 0);
 				netbuf_delete(buf);
 			}

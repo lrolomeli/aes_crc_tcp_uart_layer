@@ -97,10 +97,9 @@ uint8_t msg[68] = "Pos arre, ya jalo esto";
 
 static void uart_task(void *pvParameters)
 {
-	k64_aes_crc_send_uart(msg);
+	k64_aes_crc_send_uart(msg, 68);
 	vTaskDelete(NULL);
 }
-
 
 static void tcp_client_thread(void *arg)
 {
