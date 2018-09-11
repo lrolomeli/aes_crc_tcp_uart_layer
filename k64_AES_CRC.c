@@ -23,7 +23,7 @@ void k64_aes_crc_send_uart(uint8_t *msg, uint8_t size)
 {
 	uint32_t chksum;
 
-	uint8_t * buffer = (uint8_t *) pvPortMalloc((size) * sizeof(uint8_t));
+	uint8_t * buffer = (uint8_t *) pvPortMalloc((size-CHKSUM_SIZE_BYTES) * sizeof(uint8_t));
 
 	strncpy((char *) buffer, (char *) msg, size-CHKSUM_SIZE_BYTES);
 
